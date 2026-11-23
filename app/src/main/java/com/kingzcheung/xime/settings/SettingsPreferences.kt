@@ -1,3 +1,4 @@
+// Modified by OvO-ssk on 2026-11-24 (自造词功能修改)
 package com.kingzcheung.xime.settings
 
 import android.content.Context

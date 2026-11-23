@@ -1,3 +1,16 @@
+> [!WARNING]
+> ## ⚠️ 本项目为个人修改版（Fork）
+>
+> 本仓库基于 [Cyletix/CyIME](https://github.com/Cyletix/CyIME) 官方 **1.15.106** 版本修改，不是官方版本。
+>
+> **修改内容**：新增九键自造词记忆与前缀召回功能，并加入对应设置开关。
+>
+> **修改日期**：2026-11-24
+>
+> **修改作者**：[OvO-ssk](https://github.com/OvO-ssk)
+>
+> ---
+
 <h1 align="center">CyIME</h1>
 
 <p align="center">
