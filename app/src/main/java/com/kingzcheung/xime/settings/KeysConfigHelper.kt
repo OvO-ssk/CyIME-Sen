@@ -742,6 +742,11 @@ object KeysConfigHelper {
     // 键 id 不做大小写归一：九键为数字字符串 "1"~"9"，笔画为键面标签（一/丨/丿/丶/乛 等）。
     private var _t9GestureConfigs: Map<String, KeyGestureConfig> = emptyMap()
     private var _strokeGestureConfigs: Map<String, KeyGestureConfig> = emptyMap()
+    // 九键/笔画主键位用户改过的上下滑符号与全角半角跟随（设置页写入，getter 应用到 yaml 手势上）。
+    private var gridSymbolOverridesT9: Map<String, String> = emptyMap()
+    private var gridSymbolOverridesStroke: Map<String, String> = emptyMap()
+    private var gridSymbolFollowsT9: Set<String> = emptySet()
+    private var gridSymbolFollowsStroke: Set<String> = emptySet()
 
     /** 合并键方案（pinyin_14jian 等）对应的 xime.yaml 键盘 section，非合并键方案返回 null。 */
     internal fun mergedSectionForSchema(schemaId: String): String? =
@@ -1053,6 +1058,11 @@ object KeysConfigHelper {
             // 九键/笔画手势（keyboard.t9.keys / keyboard.stroke.keys，custom 键级覆盖）
             _t9GestureConfigs = parseGesturesSection(context, "t9")
             _strokeGestureConfigs = parseGesturesSection(context, "stroke")
+            // 主键位符号的用户覆盖（按设置页所改的格子，没改的沿用上面的 yaml 手势）
+            gridSymbolOverridesT9 = GridSwipeSymbols.load(context, false)
+            gridSymbolOverridesStroke = GridSwipeSymbols.load(context, true)
+            gridSymbolFollowsT9 = GridSwipeSymbols.loadFollows(context, false)
+            gridSymbolFollowsStroke = GridSwipeSymbols.loadFollows(context, true)
             // 基线缓存已刷新，先落标准 26 键的行布局/手势，合并键方案再由
             // setActiveKeyboardSchema 覆盖。不能只依赖 setActiveKeyboardSchema：
             // 清除已应用方案标记，保证同一方案重载时也采用最新配置。
@@ -1909,17 +1919,33 @@ object KeysConfigHelper {
     fun getT9SideSymbols(): List<String> =
         keyboardT9Config.sideSymbols ?: DEFAULT_T9_SIDE_SYMBOLS
 
-    /** 获取九键数字键手势配置（xime.yaml keyboard.t9.keys，custom 键级覆盖）。
+    /** 获取九键数字键手势配置（xime.yaml keyboard.t9.keys，custom 键级覆盖，叠加用户符号修改）。
      *  键 id 为数字字符串 "1"~"9"；无配置返回 null（布局不启用滑动）。 */
-    fun getT9KeyGesture(key: String): KeyGestureConfig? = _t9GestureConfigs[key]
+    fun getT9KeyGesture(key: String): KeyGestureConfig? = GridSwipeSymbols.apply(
+        key, _t9GestureConfigs[key], gridSymbolOverridesT9, gridSymbolFollowsT9, cornerFullWidth)
 
     /** 获取笔画左侧快捷符号列（keyboard.stroke.side_symbols，可自定义）。 */
     fun getStrokeSideSymbols(): List<String> =
         keyboardStrokeConfig.sideSymbols ?: DEFAULT_STROKE_SIDE_SYMBOLS
 
-    /** 获取笔画键手势配置（xime.yaml keyboard.stroke.keys，custom 键级覆盖）。
+    /** 获取笔画键手势配置（xime.yaml keyboard.stroke.keys，custom 键级覆盖，叠加用户符号修改）。
      *  键 id 为键面标签：一、丨、丿、丶、乛、*、分词、，、。 */
-    fun getStrokeKeyGesture(key: String): KeyGestureConfig? = _strokeGestureConfigs[key]
+    fun getStrokeKeyGesture(key: String): KeyGestureConfig? = GridSwipeSymbols.apply(
+        key, _strokeGestureConfigs[key], gridSymbolOverridesStroke, gridSymbolFollowsStroke, cornerFullWidth)
+
+    /** 设置页读取主键位当前生效的上下滑符号（不含全角半角换算，和 26 键编辑页一致）。 */
+    internal fun gridSymbolEditorValues(stroke: Boolean): Map<String, String> {
+        val overrides = if (stroke) gridSymbolOverridesStroke else gridSymbolOverridesT9
+        val follows = if (stroke) gridSymbolFollowsStroke else gridSymbolFollowsT9
+        val base = if (stroke) _strokeGestureConfigs else _t9GestureConfigs
+        return buildMap {
+            for (key in GridSwipeSymbols.keys(stroke)) {
+                val gesture = GridSwipeSymbols.apply(key, base[key], overrides, follows) ?: continue
+                put("up.$key", gesture.swipeUp?.let { it.value.ifEmpty { it.label } }.orEmpty())
+                put("down.$key", gesture.swipeDown?.let { it.value.ifEmpty { it.label } }.orEmpty())
+            }
+        }
+    }
 
     internal fun qwertySymbolEditorValues(context: Context, english: Boolean,
         variant: CornerVariant = cornerVariant): Map<String, String> {

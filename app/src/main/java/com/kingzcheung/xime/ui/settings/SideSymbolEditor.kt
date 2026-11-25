@@ -96,6 +96,8 @@ internal fun SideSymbolEditor(target: SideSymbolTarget, onResetReady: ((() -> Un
     val page = sideSymbolPage(target)
     val targets = sideSymbolPageTargets(target)
     var lists by remember(page) { mutableStateOf(targets.associateWith { it.resolve(prefs.symbolsFor(it)) }) }
+    // 九键/笔画主键配置（符号覆盖、四向动作）的「恢复默认」由 GridSwipeEditor 注册，和侧栏一起恢复。
+    var gridReset by remember(page) { mutableStateOf<(() -> Unit)?>(null) }
     // 正在弹框编辑的栏和格；格号等于这条栏的格数表示正在新加一格。
     var editingKey by rememberSaveable(page) { mutableStateOf<String?>(null) }
     var editingIndex by rememberSaveable(page) { mutableStateOf(0) }
@@ -126,6 +128,8 @@ internal fun SideSymbolEditor(target: SideSymbolTarget, onResetReady: ((() -> Un
         edit.apply()
         lists = targets.associateWith { it.resolve(null) }
         editingKey = null
+        // 这一页改过的主键上下滑符号 / 四向动作也一并回到 yaml 原样。
+        gridReset?.invoke()
     }
     DisposableEffect(page, prefs) {
         onResetReady(::reset)
@@ -145,8 +149,11 @@ internal fun SideSymbolEditor(target: SideSymbolTarget, onResetReady: ((() -> Un
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         when (page) {
             SideSymbolTarget.T9, SideSymbolTarget.STROKE -> {
-                SketchCaption(page.where)
-                NineGridSketch(page, items(page).size, page.slots == null) { index, modifier -> cell(page, index, modifier) }
+                // 主键区也做成可点按钮：点 1（分词）、2（ABC）…弹配置框，和 26 键同一处改符号与滑动动作。
+                GridSwipeEditor(page, items(page).size, page.slots == null,
+                    onResetReady = { gridReset = it }) { index, modifier ->
+                    cell(page, index, modifier)
+                }
             }
             SideSymbolTarget.NUMBER -> {
                 SketchCaption(page.where)
@@ -218,7 +225,7 @@ internal fun SideSymbolEditor(target: SideSymbolTarget, onResetReady: ((() -> Un
 }
 
 @Composable
-private fun SketchCaption(text: String) {
+internal fun SketchCaption(text: String) {
     Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
 }
 
@@ -282,9 +289,14 @@ private fun SlotRail(count: Int, canGrow: Boolean, fillWhenFew: Boolean, modifie
     }
 }
 
-/** 九键、笔画键盘：左栏 | 主键区 | 右栏，比例同 [NineGridFrame]。 */
+/**
+ * 九键、笔画键盘：左栏 | 主键区 | 右栏，比例同 [NineGridFrame]。
+ * [mainKeyCell] 渲染主键区的 9 个格子：九键/笔画配置页传可点按钮（点键弹配置框），别处不用也能照旧画死格。
+ */
 @Composable
-private fun NineGridSketch(target: SideSymbolTarget, count: Int, canGrow: Boolean, cell: @Composable (Int, Modifier) -> Unit) {
+internal fun NineGridSketch(target: SideSymbolTarget, count: Int, canGrow: Boolean,
+    cell: @Composable (Int, Modifier) -> Unit,
+    mainKeyCell: @Composable (Int, String, Modifier) -> Unit = { _, label, modifier -> FixedKey(label, modifier) }) {
     val stroke = target == SideSymbolTarget.STROKE
     val mainRows = if (stroke) strokeMainLabels().chunked(3)
         else listOf(listOf("分词", "ABC", "DEF"), listOf("GHI", "JKL", "MNO"), listOf("PQRS", "TUV", "WXYZ"))
@@ -296,8 +308,11 @@ private fun NineGridSketch(target: SideSymbolTarget, count: Int, canGrow: Boolea
                 Modifier.fillMaxWidth().weight(1f))
         }
         Column(Modifier.weight(NineGridFrame.MAIN).fillMaxHeight()) {
+            var mainIndex = 0
             mainRows.forEach { row ->
-                Row(Modifier.fillMaxWidth().weight(1f)) { row.forEach { FixedKey(it, Modifier.weight(1f).fillMaxHeight()) } }
+                Row(Modifier.fillMaxWidth().weight(1f)) {
+                    row.forEach { label -> mainKeyCell(mainIndex++, label, Modifier.weight(1f).fillMaxHeight()) }
+                }
             }
             Row(Modifier.fillMaxWidth().weight(1f)) {
                 FixedKey(modeSlotTarget(KeyboardInputPage.TEXT, 2, LocalTextModeLabel.current).label,

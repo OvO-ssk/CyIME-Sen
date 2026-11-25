@@ -301,6 +301,11 @@ private data class StrokeKeySwipes(
     /** 上滑键面提示（空串 = 显式不印键面，bubble 模式用；null = 回退 swipeText） */
     val swipeUpKeyLabel: String? = null,
     val swipeDownKeyLabel: String? = null,
+    /** 左右滑编辑快捷键（来自 GridSwipeBindings；走 onLetterSwipeAction）。 */
+    val onSwipeLeft: (() -> Unit)? = null,
+    val onSwipeRight: (() -> Unit)? = null,
+    val swipeLeftText: String? = null,
+    val swipeRightText: String? = null,
 )
 
 /**
@@ -385,6 +390,15 @@ private fun StrokeKeyboardContent(
     // 左侧快捷符号列来自 xime.yaml keyboard.stroke.side_symbols（可自定义，>4 滚动显示）
     val customSymbols = LocalKeyboardInputPreferences.current.symbolsFor(SideSymbolTarget.STROKE)
     val inputActions = LocalKeyboardInputActions.current
+    // 主键位编辑快捷键：在 Composable 作用域读一次，局部函数 swipesFor 捕获。
+    val gridBindings = LocalKeyboardInputPreferences.current.strokeGridSwipes
+    val onGridAction = inputActions.onLetterSwipeAction
+    // 和 26 键一致：设置页的方向是物理滑向；swipesFor 的 up/down 是上/下角标（KeyButton 内按 reverse 交换），
+    // 所以按 upper/lowerDirection 取 slot，用户选「上滑」才真的由上滑触发。
+    val gridUpperSlot = com.kingzcheung.xime.settings.LetterSwipeBindings.upperDirection(
+        LocalKeyboardInputPreferences.current.reverseSymbolSwipe)
+    val gridLowerSlot = com.kingzcheung.xime.settings.LetterSwipeBindings.lowerDirection(
+        LocalKeyboardInputPreferences.current.reverseSymbolSwipe)
     val commitSymbol = (if (customSymbols != null) inputActions.onCommitExactText else null)
         ?: inputActions.onCommitText ?: onKeyPress
     val strokeSideSymbols = customSymbols
@@ -410,13 +424,28 @@ private fun StrokeKeyboardContent(
     }
 
     fun swipesFor(id: String, fallbackDigit: String): StrokeKeySwipes {
+        // 主键位滑动快捷键：某方向设了动作就完全覆盖该方向原行为，没设的方向原样不动。
+        val upBinding = gridBindings["$id.$gridUpperSlot"]
+        val downBinding = gridBindings["$id.$gridLowerSlot"]
+        val leftBinding = gridBindings["$id.left"]
+        val rightBinding = gridBindings["$id.right"]
+        fun exec(action: String?) = action?.let { value -> onGridAction?.let { run -> { run(value) } } }
+        fun boundLabel(action: String?) = action?.let(com.kingzcheung.xime.settings.GridSwipeBindings::label)
+        val upText = boundLabel(upBinding)
+        val downText = boundLabel(downBinding)
+        val leftText = boundLabel(leftBinding)
+        val rightText = boundLabel(rightBinding)
         val gesture = KeysConfigHelper.getStrokeKeyGesture(id)
         if (gesture == null || (gesture.swipeUp == null && gesture.swipeDown == null)) {
             // 回退行为与内置默认（display: "key"）一致：仅键面提示，无滑动气泡
             return StrokeKeySwipes(
-                symbolInputText = fallbackDigit,
-                onSwipeUp = { onKeyPress(fallbackDigit) },
-                swipeUpKeyLabel = if (swipeHints.up && hintsActive) fallbackDigit else null,
+                symbolInputText = if (upBinding != null) null else fallbackDigit,
+                onSwipeUp = upBinding?.let { exec(it) } ?: { onKeyPress(fallbackDigit) },
+                swipeUpKeyLabel = upText ?: (if (swipeHints.up && hintsActive) fallbackDigit else null),
+                onSwipeDown = exec(downBinding),
+                swipeDownKeyLabel = downText,
+                onSwipeLeft = exec(leftBinding), onSwipeRight = exec(rightBinding),
+                swipeLeftText = leftText, swipeRightText = rightText,
             )
         }
         fun hint(def: GestureDef?): String? =
@@ -425,24 +454,32 @@ private fun StrokeKeyboardContent(
         // SwipeableKeyButton 键面提示取 swipeUpKeyLabel ?: swipeText（null 回退气泡文本），
         // bubble 模式传空串显式压制键面显示；气泡仅 bubble/both 时传（key 关闭气泡）。
         val swipeUpKeyLabel = when {
+            upBinding != null -> upText
             !swipeHints.up || !hintsActive -> null
             gesture.swipeUp?.display == DisplayMode.BUBBLE -> ""
             else -> hint(gesture.swipeUp)
         }
         return StrokeKeySwipes(
-            symbolInputText = gesture.swipeUp?.let { symbolInputValue(it.value.ifEmpty { it.label }, it.action) },
-            symbolInputDownText = gesture.swipeDown?.let { symbolInputValue(it.value.ifEmpty { it.label }, it.action) },
-            onSwipeUp = swipeHandlerFor(gesture.swipeUp, onKeyPress, onGestureAction),
-            onSwipeDown = swipeHandlerFor(gesture.swipeDown, onKeyPress, onGestureAction),
-            swipeUpText = if (swipeHints.up && hintsActive &&
-                gesture.swipeUp?.display != DisplayMode.KEY) hint(gesture.swipeUp) else null,
-            swipeDownText = if (swipeHints.down && hintsActive &&
-                gesture.swipeDown?.display != DisplayMode.KEY) hint(gesture.swipeDown) else null,
+            // 设了动作就不送原符号上屏，交出这一方向给编辑动作。
+            symbolInputText = if (upBinding != null) null
+                else gesture.swipeUp?.let { symbolInputValue(it.value.ifEmpty { it.label }, it.action) },
+            symbolInputDownText = if (downBinding != null) null
+                else gesture.swipeDown?.let { symbolInputValue(it.value.ifEmpty { it.label }, it.action) },
+            onSwipeUp = if (upBinding != null) exec(upBinding)
+                else swipeHandlerFor(gesture.swipeUp, onKeyPress, onGestureAction),
+            onSwipeDown = if (downBinding != null) exec(downBinding)
+                else swipeHandlerFor(gesture.swipeDown, onKeyPress, onGestureAction),
+            swipeUpText = upText ?: (if (swipeHints.up && hintsActive &&
+                gesture.swipeUp?.display != DisplayMode.KEY) hint(gesture.swipeUp) else null),
+            swipeDownText = downText ?: (if (swipeHints.down && hintsActive &&
+                gesture.swipeDown?.display != DisplayMode.KEY) hint(gesture.swipeDown) else null),
             swipeUpKeyLabel = swipeUpKeyLabel,
-            swipeDownKeyLabel = gesture.swipeDown?.let { def ->
+            swipeDownKeyLabel = downText ?: gesture.swipeDown?.let { def ->
                 if (swipeHints.down && hintsActive && def.display != DisplayMode.BUBBLE)
                     def.label.ifEmpty { def.value } else null
             },
+            onSwipeLeft = exec(leftBinding), onSwipeRight = exec(rightBinding),
+            swipeLeftText = leftText, swipeRightText = rightText,
         )
     }
 
@@ -775,6 +812,10 @@ private fun StrokeKeyItem(
         onPress = onPress,
         onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
         onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
+        onSwipeLeft = swipes.onSwipeLeft,
+        onSwipeRight = swipes.onSwipeRight,
+        swipeLeftText = swipes.swipeLeftText,
+        swipeRightText = swipes.swipeRightText,
         onSwipeStateChange = onSwipeStateChange,
         badgeText = swipeDigit,
         swipeText = swipes.swipeUpText,
@@ -815,6 +856,10 @@ private fun StrokeDigitKey(
         onPress = onPress,
         onSwipe = swipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
         onSwipeDown = swipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
+        onSwipeLeft = swipes.onSwipeLeft,
+        onSwipeRight = swipes.onSwipeRight,
+        swipeLeftText = swipes.swipeLeftText,
+        swipeRightText = swipes.swipeRightText,
         onSwipeStateChange = onSwipeStateChange,
         badgeText = swipeDigit,
         swipeText = swipes.swipeUpText,

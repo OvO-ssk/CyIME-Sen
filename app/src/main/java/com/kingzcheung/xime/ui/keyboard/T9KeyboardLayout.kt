@@ -447,34 +447,66 @@ private fun T9KeyboardContent(
     val onCtrlShortcut: ((Char) -> Unit)? = onGestureAction?.let { action ->
         { letter: Char -> action(GestureAction.COMMAND, com.kingzcheung.xime.keyboard.CtrlShortcuts.command(letter)) }
     }
+    // 主键位滑动快捷键：在 Composable 作用域读一次，局部函数 swipesFor 捕获（它本身不是 @Composable）。
+    // 某个方向设了动作就完全覆盖该方向原行为（含上/下滑的符号上屏）；没设的方向原样不动。
+    val gridBindings = LocalKeyboardInputPreferences.current.t9GridSwipes
+    val onGridAction = LocalKeyboardInputActions.current.onLetterSwipeAction
+    // 和 26 键一致：设置页的方向是"物理滑向"，而上/下角标由哪只手指出去跟着「反转上下滑方向」走。
+    // swipesFor 的 up/down 对应上/下角标（KeyButton 内会按 reverse 交换物理方向），
+    // 所以按 upper/lowerDirection 取 slot，用户选「上滑」才真的由上滑触发。
+    val gridUpperSlot = com.kingzcheung.xime.settings.LetterSwipeBindings.upperDirection(
+        LocalKeyboardInputPreferences.current.reverseSymbolSwipe)
+    val gridLowerSlot = com.kingzcheung.xime.settings.LetterSwipeBindings.lowerDirection(
+        LocalKeyboardInputPreferences.current.reverseSymbolSwipe)
 
     fun swipesFor(id: String): T9KeySwipes {
+        val upBinding = gridBindings["$id.$gridUpperSlot"]
+        val downBinding = gridBindings["$id.$gridLowerSlot"]
+        val leftBinding = gridBindings["$id.left"]
+        val rightBinding = gridBindings["$id.right"]
+        fun exec(action: String?) = action?.let { value -> onGridAction?.let { run -> { run(value) } } }
+        fun boundLabel(action: String?) = action?.let(com.kingzcheung.xime.settings.GridSwipeBindings::label)
+        val upText = boundLabel(upBinding)
+        val downText = boundLabel(downBinding)
         // 读一次版本号：手势配置热重载时本层重组。以前靠每次按键顺带重组才更新。
-        if (configVersion < 0) return T9KeySwipes()
-        val gesture = KeysConfigHelper.getT9KeyGesture(id) ?: return T9KeySwipes()
-        val upHint = gesture.swipeUp?.let { it.label.ifEmpty { it.value } }
-        val downHint = gesture.swipeDown?.let { it.label.ifEmpty { it.value } }
+        val gesture = if (configVersion < 0) null else KeysConfigHelper.getT9KeyGesture(id)
+        val upDef = gesture?.swipeUp
+        val downDef = gesture?.swipeDown
+        val upHint = upDef?.let { it.label.ifEmpty { it.value } }
+        val downHint = downDef?.let { it.label.ifEmpty { it.value } }
         // display 三态：key=仅键面提示（无气泡）、bubble=仅滑动气泡、both=键面+气泡。
         // 内置数字上滑默认 both：滑动显示预览，松手输入数字。
         // SwipeableKeyButton 键面提示取 swipeUpKeyLabel ?: swipeText（null 回退气泡文本），
         // bubble 模式传空串显式压制键面显示。手势回调独立于提示与 display。
+        // 设了动作的方向键面改写动作名（和 26 键角标一致）；这里不再走原符号，空串压制逻辑也不适用于它。
         val swipeUpKeyLabel = when {
+            upBinding != null -> upText
             !swipeHints.up || !hintsActive -> ""
-            gesture.swipeUp?.display == DisplayMode.BUBBLE -> ""
+            upDef?.display == DisplayMode.BUBBLE -> ""
             else -> upHint
         }
+        val originalUpText = if (swipeHints.up && upDef?.display != DisplayMode.KEY) upHint else null
+        val originalDownText = if (swipeHints.down && downDef?.display != DisplayMode.KEY) downHint else null
+        val originalDownKeyLabel = if (swipeHints.down && hintsActive &&
+            downDef?.display != DisplayMode.BUBBLE) downHint else null
         return T9KeySwipes(
-            symbolInputText = gesture.swipeUp?.let { symbolInputValue(it.value.ifEmpty { it.label }, it.action) },
-            symbolInputDownText = gesture.swipeDown?.let { symbolInputValue(it.value.ifEmpty { it.label }, it.action) },
-            onSwipeUp = swipeHandlerFor(gesture.swipeUp, commitDirect, onGestureAction),
-            onSwipeDown = swipeHandlerFor(gesture.swipeDown, commitDirect, onGestureAction),
-            swipeUpText = if (swipeHints.up &&
-                gesture.swipeUp?.display != DisplayMode.KEY) upHint else null,
-            swipeDownText = if (swipeHints.down &&
-                gesture.swipeDown?.display != DisplayMode.KEY) downHint else null,
+            // 设了动作就不送原符号上屏，交出这一方向给编辑动作。
+            symbolInputText = if (upBinding != null) null
+                else upDef?.let { symbolInputValue(it.value.ifEmpty { it.label }, it.action) },
+            symbolInputDownText = if (downBinding != null) null
+                else downDef?.let { symbolInputValue(it.value.ifEmpty { it.label }, it.action) },
+            onSwipeUp = if (upBinding != null) exec(upBinding)
+                else swipeHandlerFor(upDef, commitDirect, onGestureAction),
+            onSwipeDown = if (downBinding != null) exec(downBinding)
+                else swipeHandlerFor(downDef, commitDirect, onGestureAction),
+            swipeUpText = upText ?: originalUpText,
+            swipeDownText = downText ?: originalDownText,
             swipeUpKeyLabel = swipeUpKeyLabel,
-            swipeDownKeyLabel = if (swipeHints.down && hintsActive &&
-                gesture.swipeDown?.display != DisplayMode.BUBBLE) downHint else null,
+            swipeDownKeyLabel = downText ?: originalDownKeyLabel,
+            onSwipeLeft = exec(leftBinding),
+            onSwipeRight = exec(rightBinding),
+            swipeLeftText = boundLabel(leftBinding),
+            swipeRightText = boundLabel(rightBinding),
         )
     }
 
@@ -972,6 +1004,11 @@ internal data class T9KeySwipes(
     /** 上滑键面提示（空串 = 显式不印键面，bubble 模式用；null = 不显示） */
     val swipeUpKeyLabel: String? = null,
     val swipeDownKeyLabel: String? = null,
+    /** 左右滑编辑快捷键（九键主键位，来自 GridSwipeBindings；走 onLetterSwipeAction）。 */
+    val onSwipeLeft: (() -> Unit)? = null,
+    val onSwipeRight: (() -> Unit)? = null,
+    val swipeLeftText: String? = null,
+    val swipeRightText: String? = null,
 )
 
 /**
@@ -1046,6 +1083,10 @@ internal fun T9DigitKey(
         swipeDownKeyLabel = currentSwipes.swipeDownKeyLabel,
         onSwipe = currentSwipes.onSwipeUp?.let { handler -> { _: String -> handler() } },
         onSwipeDown = currentSwipes.onSwipeDown?.let { handler -> { _: String -> handler() } },
+        onSwipeLeft = currentSwipes.onSwipeLeft,
+        onSwipeRight = currentSwipes.onSwipeRight,
+        swipeLeftText = currentSwipes.swipeLeftText,
+        swipeRightText = currentSwipes.swipeRightText,
         shadowEnabled = shadowEnabled,
         shadowElevation = shadowElevation,
         shadowShapeRadius = shadowShapeRadius,
@@ -1194,6 +1235,9 @@ internal fun NineKeyButton(
     val digitLongPress = swipes.onSwipeUp.takeIf {
         flickDigitLongPress && digit.isNotEmpty() && LocalKeyboardInputPreferences.current.t9FlickLetters
     }
+    // 1 键等主键位的左右滑绑定从 swipes 取；0 键的候选导航由上面显式参数传入，优先于绑定。
+    val effectiveLeft = onSwipeLeft ?: swipes.onSwipeLeft
+    val effectiveRight = onSwipeRight ?: swipes.onSwipeRight
     SwipeableKeyButton(
         text = letters,
         longPressItems = digitLongPress?.let { listOf(digit) },
@@ -1201,14 +1245,14 @@ internal fun NineKeyButton(
         longPressTimeoutMillis = digitLongPress?.let { 300L },
         icon = icon,
         iconSizeDp = iconSizeDp,
-        onSwipeLeft = onSwipeLeft,
-        swipeLeftText = if (onSwipeLeft != null) "上一项" else null,
+        onSwipeLeft = effectiveLeft,
+        swipeLeftText = if (onSwipeLeft != null) "上一项" else swipes.swipeLeftText,
         // 有箭头图标时左滑预览也是箭头（左箭头 = 上一项），不出汉字（用户 10-25）。
         swipeLeftIcon = if (onSwipeLeft != null && icon != null)
             rememberVectorPainter(Icons.AutoMirrored.Filled.KeyboardArrowLeft) else null,
         // 左滑上一项、右滑下一项成对（用户 10-25）。
-        onSwipeRight = onSwipeRight,
-        swipeRightText = if (onSwipeRight != null) "下一项" else null,
+        onSwipeRight = effectiveRight,
+        swipeRightText = if (onSwipeRight != null) "下一项" else swipes.swipeRightText,
         swipeRightIcon = if (onSwipeRight != null && icon != null)
             rememberVectorPainter(Icons.AutoMirrored.Filled.KeyboardArrowRight) else null,
         onClick = onClick,

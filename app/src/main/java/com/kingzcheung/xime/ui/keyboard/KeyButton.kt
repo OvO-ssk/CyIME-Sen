@@ -756,6 +756,10 @@ fun SwipeableKeyButton(
             doublePinyinHint?.initial, doublePinyinHint?.finals.orEmpty(), dpUpCorner, dpDownCorner,
             maxWidth.value, maxHeight.value, effectiveSwipeFontSize.value, labelSize, density.fontScale) else null
         val dpHint = doublePinyinHint?.takeIf { hintsVisible && dpCornerLayout == null }
+        // 上滑写成自定义符号或被编辑动作占用时，右上角画的是那个角标；数字浮标（badge）不能再叠一份。
+        // 没改过的键角标文字和数字相同，仍只画数字，九键数字提示不受影响。
+        val upperHintDrawn = hintsVisible && !dpHidesCorners && flickPreview?.fromTop != true &&
+            !upCornerLabel.isNullOrEmpty() && upCornerLabel != badgeText
         val dpFinals = dpHint?.let { fitDoublePinyinFinals(it.finals, maxWidth.value - 6f, maxHeight.value * 0.42f,
             effectiveSwipeFontSize.value, density.fontScale) }
         // 下滑标签写得长的键盘（导入的乱序十七的韵母助记）：下滑标签写在键底部一行，主标签上移半行，见 [LocalLongSwipeDownLabels]。
@@ -872,7 +876,7 @@ fun SwipeableKeyButton(
 
                 // 上滑提示与角标文字相同（如九键/笔画上滑输入键面数字）时不再重复渲染提示，
                 // 角标已表达该信息；swipeText 状态保持非空，上滑触发与气泡不受影响。
-                if (hintsVisible && !dpHidesCorners && flickPreview?.fromTop != true && !upCornerLabel.isNullOrEmpty() && upCornerLabel != badgeText) {
+                if (upperHintDrawn) {
                     val keyLabel = upCornerLabel
                     val displayText = if (keyLabel.length <= 4) keyLabel else keyLabel.take(4)
                     Text(
@@ -903,7 +907,8 @@ fun SwipeableKeyButton(
                     )
                 }
 
-                if (badgeText != null && !(flickPreview?.fromTop == true && flickPreview?.text == badgeText)) {
+                if (badgeText != null && !upperHintDrawn &&
+                    !(flickPreview?.fromTop == true && flickPreview?.text == badgeText)) {
                     Text(
                         text = badgeText,
                         color = keyHintColor(resolvedText, frostedGlass, 0.5f, LocalKeyboardInputPreferences.current.cornerHintOpacity),
